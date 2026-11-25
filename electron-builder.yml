@@ -1,0 +1,23 @@
+appId: com.veldora.editor
+productName: VELDORA
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-electron/**/*
+publish:
+  - provider: github
+    owner: mhmmdstwn2
+    repo: veldora
+    releaseType: release
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
