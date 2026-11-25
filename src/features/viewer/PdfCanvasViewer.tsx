@@ -1161,6 +1161,16 @@ export const PdfCanvasViewer: React.FC = () => {
           usePdfStore.getState().setZoom(1.0)
           return
         }
+        if (e.key.toLowerCase() === 's' && !e.shiftKey) {
+          e.preventDefault()
+          if (inlineEditor.visible) {
+            commitInlineText()
+          }
+          setTimeout(() => {
+            usePdfStore.getState().syncToReview()
+          }, 0)
+          return
+        }
       }
 
       const target = e.target as HTMLElement

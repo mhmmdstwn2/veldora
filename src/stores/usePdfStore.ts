@@ -63,6 +63,12 @@ interface PdfState {
   // Mode: Canva-style Content Editor vs EmbedPDF Review/Form
   editorMode: 'content' | 'review'
   setEditorMode: (mode: 'content' | 'review') => void
+  reviewDocBytes: Uint8Array | null
+  reviewLastSyncedAt: number | null
+  toastMessage: string | null
+  showToast: (msg: string) => void
+  syncToReview: () => Promise<Uint8Array | null>
+  setReviewDocBytes: (bytes: Uint8Array | null, docName?: string) => void
 
   // Signature Detection
   detectedSignatureSpots: DetectedSignatureSpot[]
@@ -164,6 +170,61 @@ export const usePdfStore = create<PdfState>((set, get) => ({
   pageNumberOptions: null,
   editorMode: 'content',
   setEditorMode: (mode: 'content' | 'review') => set({ editorMode: mode }),
+  reviewDocBytes: null,
+  reviewLastSyncedAt: null,
+  toastMessage: null,
+  showToast: (msg: string) => {
+    set({ toastMessage: msg })
+    setTimeout(() => {
+      if (get().toastMessage === msg) {
+        set({ toastMessage: null })
+      }
+    }, 3200)
+  },
+  syncToReview: async () => {
+    const state = get()
+    if (!state.originalDocBytes) return null
+    try {
+      const rendered = await PdfEditor.exportFullEditedPdf(state.originalDocBytes, {
+        annotations: state.annotations,
+        originalTexts: state.originalTexts,
+        originalImages: state.originalImages,
+        watermark: state.watermarkOptions ?? undefined,
+        pageNumbers: state.pageNumberOptions ?? undefined,
+      })
+      const copy = new Uint8Array(rendered.slice())
+      set({
+        reviewDocBytes: copy,
+        reviewLastSyncedAt: Date.now(),
+      })
+      // Push live update to connected LAN viewers if hosting
+      const api = (window as any)?.electronAPI
+      if (api?.liveShareUpdatePdf) {
+        api.liveShareUpdatePdf(copy, state.currentDoc?.name || 'document.pdf').catch(() => {})
+      }
+      state.showToast('Tersimpan ke Form & Review (POV Pembaca)')
+      return copy
+    } catch (err: any) {
+      console.error('syncToReview failed:', err)
+      state.showToast(`Gagal sinkron ke Form & Review: ${err?.message || err}`)
+      return null
+    }
+  },
+  setReviewDocBytes: (bytes: Uint8Array | null, docName?: string) => {
+    set((state) => ({
+      reviewDocBytes: bytes,
+      reviewLastSyncedAt: bytes ? Date.now() : null,
+      currentDoc:
+        bytes && !state.currentDoc
+          ? {
+              name: docName || 'Live Shared Review.pdf',
+              size: bytes.byteLength,
+              pageCount: 1,
+              data: bytes,
+            }
+          : state.currentDoc,
+    }))
+  },
 
   detectedSignatureSpots: [],
   activeSignatureSpot: null,
@@ -202,6 +263,8 @@ export const usePdfStore = create<PdfState>((set, get) => ({
 
       set({
         originalDocBytes,
+        reviewDocBytes: null,
+        reviewLastSyncedAt: null,
         currentDoc: docInfo,
         pdfJsDoc,
         pages,

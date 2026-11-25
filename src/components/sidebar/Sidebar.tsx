@@ -15,6 +15,7 @@ import {
   MessageSquare,
   Image as ImageIcon,
   ShieldCheck,
+  Radio,
 } from 'lucide-react'
 import { usePdfStore } from '@/stores/usePdfStore'
 import { ToolType } from '@/types'
@@ -116,6 +117,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
         >
           <FolderOpen className="w-4 h-4 text-blue-400" />
           Open PDF...
+        </button>
+
+        <button
+          onClick={() => setActiveModal('live-share')}
+          className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium text-emerald-400 hover:text-emerald-200 hover:bg-emerald-950/30 transition-colors"
+        >
+          <Radio className="w-4 h-4 text-emerald-400" />
+          Join / Share Live Review
         </button>
       </div>
 

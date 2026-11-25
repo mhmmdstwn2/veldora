@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Sidebar } from '@/components/sidebar/Sidebar'
 import { DashboardView } from '@/features/dashboard/DashboardView'
 import { Header } from '@/components/layout/Header'
@@ -20,13 +20,39 @@ import { WatermarkDialog } from '@/components/dialogs/WatermarkDialog'
 import { PageNumberDialog } from '@/components/dialogs/PageNumberDialog'
 import { CropDialog } from '@/components/dialogs/CropDialog'
 import { SecurityDialog } from '@/components/dialogs/SecurityDialog'
+import { LiveShareDialog } from '@/components/dialogs/LiveShareDialog'
 import { UpdateBanner } from '@/components/layout/UpdateBanner'
 import { usePdfStore } from '@/stores/usePdfStore'
-import { Loader2, AlertCircle } from 'lucide-react'
+import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
 
 export const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<'dashboard' | 'editor'>('dashboard')
-  const { currentDoc, isLoading, errorMessage, editorMode } = usePdfStore()
+  const {
+    currentDoc,
+    isLoading,
+    errorMessage,
+    toastMessage,
+    editorMode,
+    setReviewDocBytes,
+    setEditorMode,
+    showToast,
+  } = usePdfStore()
+
+  useEffect(() => {
+    const api = (window as any)?.electronAPI
+    if (!api?.onLiveSharePdfReceived) return
+    const off = api.onLiveSharePdfReceived(
+      (data: { pdfBytes: Uint8Array; docName: string }) => {
+        if (data?.pdfBytes) {
+          setReviewDocBytes(new Uint8Array(data.pdfBytes), data.docName)
+          setEditorMode('review')
+          setCurrentView('editor')
+          showToast('Dokumen Form & Review diperbarui secara live oleh Host')
+        }
+      }
+    )
+    return () => off?.()
+  }, [setReviewDocBytes, setEditorMode, showToast])
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#0c0d10] font-sans antialiased text-slate-100">
@@ -87,6 +113,14 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {/* Toast Notification (Ctrl+S & Live Share) */}
+      {toastMessage && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#121622]/95 border border-emerald-500/40 text-emerald-100 px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2.5 text-xs font-medium backdrop-blur-md">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Modals & Dialogs */}
       <SplitDialog />
       <MergeDialog />
@@ -101,6 +135,7 @@ export const App: React.FC = () => {
       <PageNumberDialog />
       <CropDialog />
       <SecurityDialog />
+      <LiveShareDialog />
       <UpdateBanner />
     </div>
   )

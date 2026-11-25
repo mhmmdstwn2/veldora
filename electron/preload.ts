@@ -26,5 +26,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('updater:status', listener)
     }
   },
+
+  // Live Share (LAN Form & Review)
+  liveShareStartHost: (pdfBytes: Uint8Array, docName: string) =>
+    ipcRenderer.invoke('live-share:start-host', { pdfBytes, docName }),
+  liveShareUpdatePdf: (pdfBytes: Uint8Array, docName?: string) =>
+    ipcRenderer.invoke('live-share:update-pdf', { pdfBytes, docName }),
+  liveShareStopHost: () => ipcRenderer.invoke('live-share:stop-host'),
+  liveShareGetHostStatus: () => ipcRenderer.invoke('live-share:get-host-status'),
+  liveShareStartDiscovery: () => ipcRenderer.invoke('live-share:start-discovery'),
+  liveShareStopDiscovery: () => ipcRenderer.invoke('live-share:stop-discovery'),
+  liveShareJoin: (pairId: string) => ipcRenderer.invoke('live-share:join', pairId),
+  liveShareLeave: () => ipcRenderer.invoke('live-share:leave'),
+  onLiveShareHostStatus: (callback: (status: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('live-share:host-status', listener)
+    return () => ipcRenderer.removeListener('live-share:host-status', listener)
+  },
+  onLiveShareClientStatus: (callback: (status: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('live-share:client-status', listener)
+    return () => ipcRenderer.removeListener('live-share:client-status', listener)
+  },
+  onLiveShareDiscovered: (callback: (hosts: any[]) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('live-share:discovered', listener)
+    return () => ipcRenderer.removeListener('live-share:discovered', listener)
+  },
+  onLiveSharePdfReceived: (callback: (data: { pdfBytes: Uint8Array; docName: string }) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('live-share:pdf-received', listener)
+    return () => ipcRenderer.removeListener('live-share:pdf-received', listener)
+  },
 })
 

@@ -1,25 +1,36 @@
 import React, { useEffect, useState } from 'react'
 import { PDFViewer } from '@embedpdf/viewer-react'
 import { usePdfStore } from '@/stores/usePdfStore'
-import { FileUp, FileCheck, PenTool, CheckSquare } from 'lucide-react'
+import { FileUp, FileCheck, PenTool, CheckSquare, Radio } from 'lucide-react'
 
 export const EmbedPdfViewer: React.FC = () => {
-  const { originalDocBytes, currentDoc, openFileWithPicker, setEditorMode } = usePdfStore()
+  const {
+    originalDocBytes,
+    reviewDocBytes,
+    reviewLastSyncedAt,
+    currentDoc,
+    openFileWithPicker,
+    setEditorMode,
+    setActiveModal,
+  } = usePdfStore()
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
 
+  const activeBytes =
+    reviewDocBytes && reviewDocBytes.byteLength > 0 ? reviewDocBytes : originalDocBytes
+
   useEffect(() => {
-    if (!originalDocBytes || originalDocBytes.byteLength === 0) {
+    if (!activeBytes || activeBytes.byteLength === 0) {
       setBlobUrl(null)
       return
     }
-    const blob = new Blob([originalDocBytes.buffer as ArrayBuffer], { type: 'application/pdf' })
+    const blob = new Blob([activeBytes.buffer as ArrayBuffer], { type: 'application/pdf' })
     const url = URL.createObjectURL(blob)
     setBlobUrl(url)
 
     return () => {
       URL.revokeObjectURL(url)
     }
-  }, [originalDocBytes])
+  }, [activeBytes])
 
   if (!blobUrl) {
     return (
@@ -53,19 +64,36 @@ export const EmbedPdfViewer: React.FC = () => {
             <CheckSquare className="w-3 h-3" />
             Mode Review & Form Active
           </span>
-          <span className="hidden sm:inline text-slate-400 text-[11px]">
-            AcroForms, Anotasi, Komentar Thread, dan Pengukuran Aktif
-          </span>
+          {reviewLastSyncedAt ? (
+            <span className="hidden sm:inline text-emerald-300/90 text-[11px]">
+              • Preview POV Pembaca (tersinkron {new Date(reviewLastSyncedAt).toLocaleTimeString('id-ID')})
+            </span>
+          ) : (
+            <span className="hidden sm:inline text-slate-400 text-[11px]">
+              AcroForms, Anotasi, Komentar Thread, dan Pengukuran Aktif
+            </span>
+          )}
         </div>
 
-        <button
-          onClick={() => setEditorMode('content')}
-          className="text-xs text-brand-purple hover:text-purple-300 flex items-center gap-1 font-medium hover:bg-brand-violet/10 px-2 py-1 rounded transition-colors"
-          title="Kembali ke mode Canva untuk edit teks atau geser gambar langsung"
-        >
-          <PenTool className="w-3 h-3" />
-          <span>Switch ke Edit Konten (Canva)</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveModal('live-share')}
+            className="text-xs text-emerald-400 hover:text-white flex items-center gap-1 font-medium bg-emerald-500/10 hover:bg-emerald-600/30 border border-emerald-500/30 px-2.5 py-1 rounded transition-colors"
+            title="Bagikan tampilan Form & Review ini secara live via LAN / Wi-Fi"
+          >
+            <Radio className="w-3 h-3" />
+            <span>Share Live</span>
+          </button>
+
+          <button
+            onClick={() => setEditorMode('content')}
+            className="text-xs text-brand-purple hover:text-purple-300 flex items-center gap-1 font-medium hover:bg-brand-violet/10 px-2 py-1 rounded transition-colors"
+            title="Kembali ke mode Canva untuk edit teks atau geser gambar langsung"
+          >
+            <PenTool className="w-3 h-3" />
+            <span>Switch ke Edit Konten (Canva)</span>
+          </button>
+        </div>
       </div>
 
       {/* EmbedPDF Viewer Container */}

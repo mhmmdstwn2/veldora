@@ -15,6 +15,7 @@ import {
   PenTool,
   CheckSquare,
   FolderOpen,
+  Radio,
 } from 'lucide-react'
 import { usePdfStore } from '@/stores/usePdfStore'
 import { getFileAdapter } from '@/adapters'
@@ -133,6 +134,14 @@ export const Header: React.FC<HeaderProps> = ({ onBackToDashboard }) => {
         >
           <CheckSquare className="w-3.5 h-3.5" />
           <span>Form & Review (EmbedPDF)</span>
+        </button>
+        <button
+          onClick={() => setActiveModal('live-share')}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-emerald-400 hover:text-white hover:bg-emerald-600/25 transition-all ml-0.5"
+          title="Share Live Form & Review ke pengguna VELDORA lain (LAN / Wi-Fi)"
+        >
+          <Radio className="w-3.5 h-3.5" />
+          <span className="hidden xl:inline">Share Live</span>
         </button>
       </div>
 
