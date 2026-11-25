@@ -58,5 +58,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('live-share:pdf-received', listener)
     return () => ipcRenderer.removeListener('live-share:pdf-received', listener)
   },
+
+  // System Fonts (Offline Full Font Support)
+  listSystemFonts: () => ipcRenderer.invoke('fonts:list-system'),
+  readSystemFont: (filePath: string) => ipcRenderer.invoke('fonts:read-file', filePath),
 })
 

@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   X,
   Type,
@@ -25,6 +25,11 @@ import {
 import { usePdfStore } from '@/stores/usePdfStore'
 import { PdfTextElement, PdfImageElement, AnnotationItem } from '@/types'
 import { applyRunStyleToAll, getEffectiveRuns } from '@/core/pdf/rich-text'
+import {
+  BUNDLED_FONTS,
+  getSystemFonts,
+  SystemFontFamily,
+} from '@/core/pdf/font-registry'
 import { calculateFittedDimensions } from '@/utils/image-utils'
 
 export const PropertiesPanel: React.FC = () => {
@@ -46,6 +51,11 @@ export const PropertiesPanel: React.FC = () => {
     rotateCurrentPage,
     setActiveModal,
   } = usePdfStore()
+
+  const [systemFonts, setSystemFonts] = useState<SystemFontFamily[]>([])
+  useEffect(() => {
+    getSystemFonts().then(setSystemFonts)
+  }, [])
 
   if (!isPropertiesOpen) return null
 
@@ -185,7 +195,10 @@ export const PropertiesPanel: React.FC = () => {
                         Font Family
                       </label>
                       <select
-                        value={textObj.fontFamily || 'Helvetica'}
+                        value={(textObj.fontFamily || 'Helvetica').replace(
+                          /-(Bold|Italic|Oblique|BoldItalic|BoldOblique)$/i,
+                          ''
+                        )}
                         onChange={(e) => {
                           const ff = e.target.value
                           if (isOrig) {
@@ -196,16 +209,29 @@ export const PropertiesPanel: React.FC = () => {
                         }}
                         className="w-full bg-[#181b26] border border-[#272b3c] rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none"
                       >
-                        <option value="Helvetica">Helvetica (Sans-Serif)</option>
-                        <option value="Helvetica-Bold">Helvetica Bold</option>
-                        <option value="TimesRoman">Times New Roman</option>
-                        <option value="Times-Roman-Bold">Times New Roman Bold</option>
-                        <option value="Courier">Courier (Monospace)</option>
-                        <option value="Courier-Bold">Courier Bold</option>
-                        <option value="DejaVuSans">DejaVu Sans</option>
-                        <option value="DejaVuSans-Bold">DejaVu Sans Bold</option>
-                        <option value="Lato">Lato</option>
-                        <option value="Lato-Bold">Lato Bold</option>
+                        <optgroup label="Font Bawaan VELDORA (Offline)">
+                          {BUNDLED_FONTS.map((f) => (
+                            <option key={f.id} value={f.id}>
+                              {f.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                        {systemFonts.length > 0 && (
+                          <optgroup label={`Font Sistem Windows (${systemFonts.length})`}>
+                            {systemFonts
+                              .filter(
+                                (sf) =>
+                                  !BUNDLED_FONTS.some(
+                                    (bf) => bf.id.toLowerCase() === sf.family.toLowerCase()
+                                  )
+                              )
+                              .map((sf) => (
+                                <option key={sf.family} value={sf.family}>
+                                  {sf.family}
+                                </option>
+                              ))}
+                          </optgroup>
+                        )}
                       </select>
                     </div>
 

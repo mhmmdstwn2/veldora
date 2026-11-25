@@ -225,36 +225,12 @@ export function imageObjToDataUrl(imgData: any): string | null {
   return extractImageWithContentBounds(imgData)?.dataUrl ?? null
 }
 
+import { resolveCssFontFamily } from '@/core/pdf/font-registry'
+
 /**
  * Returns exact native CSS font family matching PDF font metadata
  */
 export function getCssFontFamily(fontFamily?: string): string {
-  if (!fontFamily) return `'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`
-  const lower = fontFamily.toLowerCase()
-
-  if (lower.includes('dejavu')) {
-    return `'DejaVu Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif`
-  }
-  if (lower.includes('lato')) {
-    return `'Lato', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`
-  }
-  if (lower.includes('roboto')) {
-    return `'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`
-  }
-  if (lower.includes('calibri')) {
-    return `'Calibri', 'Segoe UI', Arial, sans-serif`
-  }
-  if (lower.includes('arial') || lower.includes('helvetica')) {
-    return `'Helvetica Neue', Helvetica, Arial, sans-serif`
-  }
-  if (lower.includes('times') || lower.includes('roman') || lower.includes('serif')) {
-    return `'Times New Roman', Times, Georgia, serif`
-  }
-  if (lower.includes('courier') || lower.includes('mono')) {
-    return `'Courier New', Courier, monospace`
-  }
-
-  const cleanName = fontFamily.replace(/-?(Bold|Italic|Regular|Medium|Light)/gi, '').trim()
-  return `'${cleanName}', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif`
+  return resolveCssFontFamily(fontFamily)
 }
 

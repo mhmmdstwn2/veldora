@@ -6,6 +6,7 @@ import { registerFileIpc } from './ipc/file.ipc'
 import { registerWindowIpc } from './ipc/window.ipc'
 import { registerUpdaterIpc, triggerStartupUpdateCheck } from './ipc/updater.ipc'
 import { registerLiveShareIpc } from './ipc/live-share.ipc'
+import { registerFontsIpc } from './ipc/fonts.ipc'
 
 const logFile = path.join(app.getPath('userData'), 'veldora_debug.log')
 function logDebug(msg: string) {
@@ -46,6 +47,7 @@ function createWindow() {
   registerWindowIpc(() => mainWindow)
   registerUpdaterIpc(() => mainWindow, logDebug)
   registerLiveShareIpc(() => mainWindow)
+  registerFontsIpc()
 
   if (process.env.VITE_DEV_SERVER_URL) {
     logDebug(`Loading URL: ${process.env.VITE_DEV_SERVER_URL}`)

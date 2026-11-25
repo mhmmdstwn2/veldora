@@ -11,6 +11,7 @@ import {
   CropOptions,
 } from '@/types'
 import { getEffectiveRuns, splitRunsByLine } from './rich-text'
+import { findBundledFont, findCachedSystemFont, getSystemFonts } from './font-registry'
 
 function decodeAscii85(bytes: Uint8Array | string): Uint8Array {
   let s = typeof bytes === 'string' ? bytes : new TextDecoder('latin1').decode(bytes)
@@ -545,65 +546,147 @@ export class PdfEditor {
     let embeddedArialBold: PDFFont | null = null
     let embeddedCalibri: PDFFont | null = null
     let embeddedCalibriBold: PDFFont | null = null
+    const dynamicFontCache = new Map<string, PDFFont>()
+
+    const loadBundledFontBytes = async (name: string): Promise<Uint8Array | null> => {
+      if (typeof process !== 'undefined' && process.versions && process.versions.node) {
+        try {
+          const fs = await import('fs')
+          const path = await import('path')
+          const localPublicPath = path.join(process.cwd(), 'public/fonts', name)
+          if (fs.existsSync(localPublicPath)) {
+            return fs.readFileSync(localPublicPath)
+          }
+          const winFontPath = path.join('C:/Windows/Fonts', name)
+          if (fs.existsSync(winFontPath)) {
+            return fs.readFileSync(winFontPath)
+          }
+        } catch { }
+      }
+      if (typeof window !== 'undefined' && window.location?.protocol === 'file:') {
+        try {
+          const url = new URL(`./fonts/${name}`, window.location.href).href
+          return await new Promise<Uint8Array | null>((resolve) => {
+            const xhr = new XMLHttpRequest()
+            xhr.open('GET', url, true)
+            xhr.responseType = 'arraybuffer'
+            xhr.onload = () => {
+              if ((xhr.status === 200 || xhr.status === 0) && xhr.response) {
+                resolve(new Uint8Array(xhr.response))
+              } else {
+                resolve(null)
+              }
+            }
+            xhr.onerror = () => resolve(null)
+            xhr.send()
+          })
+        } catch { }
+      }
+      if (typeof fetch !== 'undefined') {
+        try {
+          const res = await fetch(`./fonts/${name}`)
+          if (res.ok) {
+            const buf = await res.arrayBuffer()
+            return new Uint8Array(buf)
+          }
+        } catch { }
+      }
+      return null
+    }
+
+    const loadSystemFontBytes = async (filePath: string): Promise<Uint8Array | null> => {
+      try {
+        const api = typeof window !== 'undefined' ? (window as any).electronAPI : null
+        if (api?.readSystemFont) {
+          const bytes = await api.readSystemFont(filePath)
+          if (bytes) return new Uint8Array(bytes)
+        }
+        if (typeof process !== 'undefined' && process.versions && process.versions.node) {
+          const fs = await import('fs')
+          if (fs.existsSync(filePath)) return new Uint8Array(fs.readFileSync(filePath))
+        }
+      } catch {}
+      return null
+    }
 
     try {
-      const loadFont = async (name: string): Promise<Uint8Array | null> => {
-        if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-          try {
-            const fs = await import('fs')
-            const path = await import('path')
-            const localPublicPath = path.join(process.cwd(), 'public/fonts', name)
-            if (fs.existsSync(localPublicPath)) {
-              return fs.readFileSync(localPublicPath)
-            }
-            const winFontPath = path.join('C:/Windows/Fonts', name)
-            if (fs.existsSync(winFontPath)) {
-              return fs.readFileSync(winFontPath)
-            }
-          } catch { }
-        }
-        if (typeof window !== 'undefined' && window.location?.protocol === 'file:') {
-          try {
-            const url = new URL(`./fonts/${name}`, window.location.href).href
-            return await new Promise<Uint8Array | null>((resolve) => {
-              const xhr = new XMLHttpRequest()
-              xhr.open('GET', url, true)
-              xhr.responseType = 'arraybuffer'
-              xhr.onload = () => {
-                if ((xhr.status === 200 || xhr.status === 0) && xhr.response) {
-                  resolve(new Uint8Array(xhr.response))
-                } else {
-                  resolve(null)
-                }
-              }
-              xhr.onerror = () => resolve(null)
-              xhr.send()
-            })
-          } catch { }
-        }
-        if (typeof fetch !== 'undefined') {
-          try {
-            const res = await fetch(`./fonts/${name}`)
-            if (res.ok) {
-              const buf = await res.arrayBuffer()
-              return new Uint8Array(buf)
-            }
-          } catch { }
-        }
-        return null
-      }
+      await getSystemFonts()
 
-      const arialBytes = await loadFont('arial.ttf')
+      const arialBytes = await loadBundledFontBytes('arial.ttf')
       if (arialBytes) embeddedArial = await doc.embedFont(arialBytes, { subset: true })
 
-      const arialBdBytes = await loadFont('arialbd.ttf')
+      const arialBdBytes = await loadBundledFontBytes('arialbd.ttf')
       if (arialBdBytes) embeddedArialBold = await doc.embedFont(arialBdBytes, { subset: true })
 
-      const calibriBytes = await loadFont('calibri.ttf')
+      const calibriBytes = await loadBundledFontBytes('calibri.ttf')
       if (calibriBytes) embeddedCalibri = await doc.embedFont(calibriBytes, { subset: true })
 
-      const calibriBdBytes = await loadFont('calibrib.ttf')
+      const calibriBdBytes = await loadBundledFontBytes('calibrib.ttf')
       if (calibriBdBytes) embeddedCalibriBold = await doc.embedFont(calibriBdBytes, { subset: true })
+
+      const neededVariants = new Map<string, { family: string; bold: boolean; italic: boolean }>()
+      const collectRuns = (family: string | undefined, runs: TextRun[]) => {
+        const base = family || 'Helvetica'
+        for (const r of runs) {
+          const b = Boolean(r.bold)
+          const i = Boolean(r.italic)
+          const key = `${base}::${b ? 'B' : ''}${i ? 'I' : ''}`
+          if (!neededVariants.has(key)) {
+            neededVariants.set(key, { family: base, bold: b, italic: i })
+          }
+        }
+      }
+
+      for (const t of options.originalTexts || []) {
+        if (!t.isModified || t.isDeleted) continue
+        collectRuns(t.fontFamily, getEffectiveRuns(t))
+      }
+      for (const a of options.annotations || []) {
+        if (a.type !== 'text' || !a.text) continue
+        collectRuns(a.fontFamily, getEffectiveRuns(a))
+      }
+
+      for (const [key, spec] of neededVariants.entries()) {
+        const variantKey: 'boldItalic' | 'bold' | 'italic' | 'regular' =
+          spec.bold && spec.italic
+            ? 'boldItalic'
+            : spec.bold
+              ? 'bold'
+              : spec.italic
+                ? 'italic'
+                : 'regular'
+
+        const bundled = findBundledFont(spec.family)
+        if (bundled) {
+          const fileName =
+            bundled.files[variantKey] ||
+            (spec.bold ? bundled.files.bold : undefined) ||
+            (spec.italic ? bundled.files.italic : undefined) ||
+            bundled.files.regular
+          if (fileName) {
+            const bytes = await loadBundledFontBytes(fileName)
+            if (bytes) {
+              dynamicFontCache.set(key, await doc.embedFont(bytes, { subset: true }))
+              continue
+            }
+          }
+        }
+
+        const sys = findCachedSystemFont(spec.family)
+        if (sys) {
+          const filePath =
+            sys[variantKey] ||
+            (spec.bold ? sys.bold : undefined) ||
+            (spec.italic ? sys.italic : undefined) ||
+            sys.regular
+          if (filePath) {
+            const bytes = await loadSystemFontBytes(filePath)
+            if (bytes) {
+              dynamicFontCache.set(key, await doc.embedFont(bytes, { subset: true }))
+            }
+          }
+        }
+      }
     } catch (e) {
       console.warn('Font embedding notice:', e)
     }
@@ -613,12 +696,17 @@ export class PdfEditor {
       overrideBold?: boolean,
       overrideItalic?: boolean
     ) => {
-      const lower = (fontFamily || '').toLowerCase()
+      const base = fontFamily || 'Helvetica'
+      const lower = base.toLowerCase()
       const isBold = overrideBold !== undefined ? overrideBold : lower.includes('bold')
       const isItalic =
         overrideItalic !== undefined
           ? overrideItalic
           : lower.includes('italic') || lower.includes('oblique')
+
+      const cacheKey = `${base}::${isBold ? 'B' : ''}${isItalic ? 'I' : ''}`
+      const cached = dynamicFontCache.get(cacheKey)
+      if (cached) return cached
 
       if (lower.includes('times') || lower.includes('serif') || lower.includes('roman')) {
         if (isBold && isItalic) return timesBoldItalicFont
