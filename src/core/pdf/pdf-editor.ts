@@ -5,10 +5,12 @@ import {
   AnnotationItem,
   PdfTextElement,
   PdfImageElement,
+  TextRun,
   WatermarkOptions,
   PageNumberOptions,
   CropOptions,
 } from '@/types'
+import { getEffectiveRuns, splitRunsByLine } from './rich-text'
 
 function decodeAscii85(bytes: Uint8Array | string): Uint8Array {
   let s = typeof bytes === 'string' ? bytes : new TextDecoder('latin1').decode(bytes)
@@ -606,29 +608,17 @@ export class PdfEditor {
       console.warn('Font embedding notice:', e)
     }
 
-    const selectFont = (fontFamily?: string) => {
+    const selectFont = (
+      fontFamily?: string,
+      overrideBold?: boolean,
+      overrideItalic?: boolean
+    ) => {
       const lower = (fontFamily || '').toLowerCase()
-      const isBold = lower.includes('bold')
-      const isItalic = lower.includes('italic') || lower.includes('oblique')
-
-      if (lower.includes('calibri')) {
-        if (isBold && embeddedCalibriBold) return embeddedCalibriBold
-        if (embeddedCalibri) return embeddedCalibri
-      }
-
-      if (
-        !fontFamily ||
-        lower.includes('arial') ||
-        lower.includes('sans') ||
-        lower.includes('helvetica') ||
-        lower.includes('roboto') ||
-        lower.includes('lato') ||
-        lower.includes('dejavu') ||
-        lower.includes('g_d')
-      ) {
-        if (isBold && embeddedArialBold) return embeddedArialBold
-        if (embeddedArial) return embeddedArial
-      }
+      const isBold = overrideBold !== undefined ? overrideBold : lower.includes('bold')
+      const isItalic =
+        overrideItalic !== undefined
+          ? overrideItalic
+          : lower.includes('italic') || lower.includes('oblique')
 
       if (lower.includes('times') || lower.includes('serif') || lower.includes('roman')) {
         if (isBold && isItalic) return timesBoldItalicFont
@@ -641,10 +631,71 @@ export class PdfEditor {
         if (isItalic) return courierObliqueFont
         return courierFont
       }
+
+      if (lower.includes('calibri') && !isItalic) {
+        if (isBold && embeddedCalibriBold) return embeddedCalibriBold
+        if (embeddedCalibri) return embeddedCalibri
+      }
+
+      if (
+        (!fontFamily ||
+          lower.includes('arial') ||
+          lower.includes('sans') ||
+          lower.includes('helvetica') ||
+          lower.includes('roboto') ||
+          lower.includes('lato') ||
+          lower.includes('dejavu') ||
+          lower.includes('g_d')) &&
+        !isItalic
+      ) {
+        if (isBold && embeddedArialBold) return embeddedArialBold
+        if (embeddedArial) return embeddedArial
+      }
+
       if (isBold && isItalic) return boldObliqueFont
       if (isBold) return embeddedArialBold || boldFont
       if (isItalic) return obliqueFont
       return embeddedArial || font
+    }
+
+    const drawRichRuns = (
+      page: ReturnType<typeof doc.getPage>,
+      runs: TextRun[],
+      opts: {
+        x: number
+        y: number
+        fontSize: number
+        lineHeight: number
+        fontFamily?: string
+        color: ReturnType<typeof rgb>
+      }
+    ) => {
+      const lines = splitRunsByLine(runs)
+      lines.forEach((lineRuns, lineIdx) => {
+        let cursorX = opts.x
+        const baselineY = opts.y - lineIdx * opts.lineHeight
+        for (const run of lineRuns) {
+          const chosen = selectFont(opts.fontFamily, Boolean(run.bold), Boolean(run.italic))
+          const runColor = run.color ? parseHex(run.color) : opts.color
+          page.drawText(run.text, {
+            x: cursorX,
+            y: baselineY,
+            size: opts.fontSize,
+            font: chosen,
+            color: runColor,
+          })
+          const runWidth = chosen.widthOfTextAtSize(run.text, opts.fontSize)
+          if (run.underline && runWidth > 0) {
+            page.drawLine({
+              start: { x: cursorX, y: baselineY - opts.fontSize * 0.12 },
+              end: { x: cursorX + runWidth, y: baselineY - opts.fontSize * 0.12 },
+              thickness: Math.max(0.6, opts.fontSize * 0.06),
+              color: runColor,
+            })
+          }
+          cursorX += runWidth
+        }
+      })
     }
 
     // 1. REAL PDF TEXT EDITING: CLEANLY REMOVE ORIGINAL TEXT AND DRAW MODIFICATIONS
@@ -708,7 +759,6 @@ export class PdfEditor {
         // Draw modified text items (that are not deleted)
         for (const item of items) {
           if (!item.isDeleted && item.text) {
-            const chosenFont = selectFont(item.fontFamily)
             const isMoved = (item.origX !== undefined && Math.abs(item.x - item.origX) > 0.1) ||
               (item.origY !== undefined && Math.abs(item.y - item.origY) > 0.1)
 
@@ -723,11 +773,13 @@ export class PdfEditor {
               drawY = topY - item.fontSize * 0.82
             }
 
-            page.drawText(item.text, {
+            const runs = getEffectiveRuns(item)
+            drawRichRuns(page, runs, {
               x: drawX,
               y: drawY,
-              size: item.fontSize,
-              font: chosenFont,
+              fontSize: item.fontSize,
+              lineHeight: item.lineHeight || item.fontSize * 1.35,
+              fontFamily: item.fontFamily,
               color: parseHex(item.color),
             })
           }
@@ -839,11 +891,13 @@ export class PdfEditor {
             })
           }
 
-          page.drawText(ann.text, {
+          const runs = getEffectiveRuns(ann)
+          drawRichRuns(page, runs, {
             x,
             y: y - fontSize,
-            size: fontSize,
-            font: selectFont(ann.fontFamily),
+            fontSize,
+            lineHeight: fontSize * 1.35,
+            fontFamily: ann.fontFamily,
             color: parseHex(ann.color),
           })
         } else if (ann.type === 'highlight') {

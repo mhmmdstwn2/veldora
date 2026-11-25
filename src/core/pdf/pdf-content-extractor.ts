@@ -1,6 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist'
-import { PdfTextElement, PdfImageElement, PdfOutlineItem } from '@/types'
+import { PdfTextElement, PdfImageElement, PdfOutlineItem, TextRun } from '@/types'
 import { extractImageWithContentBounds } from '@/utils/image-utils'
+import { normalizeRuns } from './rich-text'
 
 export class PdfContentExtractor {
   /**
@@ -194,20 +195,42 @@ export class PdfContentExtractor {
         if (currentGroup.length === 0) return
 
         let combinedText = ''
+        const rawRuns: TextRun[] = []
         for (let i = 0; i < currentGroup.length; i++) {
           const r = currentGroup[i]
           if (i === 0) {
             combinedText = r.str
+            rawRuns.push({
+              text: r.str,
+              bold: r.isBold,
+              italic: r.isItalic,
+            })
           } else {
             const prev = currentGroup[i - 1]
             const gap = r.x - (prev.x + prev.width)
             if (gap > 0.05 && !combinedText.endsWith(' ') && !r.str.startsWith(' ')) {
               combinedText += ' ' + r.str
+              rawRuns.push({
+                text: ' ',
+                bold: prev.isBold && r.isBold,
+                italic: prev.isItalic && r.isItalic,
+              })
+              rawRuns.push({
+                text: r.str,
+                bold: r.isBold,
+                italic: r.isItalic,
+              })
             } else {
               combinedText += r.str
+              rawRuns.push({
+                text: r.str,
+                bold: r.isBold,
+                italic: r.isItalic,
+              })
             }
           }
         }
+        const normalizedRuns = normalizeRuns(rawRuns)
 
         if (!combinedText.trim()) {
           currentGroup = []
@@ -254,6 +277,7 @@ export class PdfContentExtractor {
           pageNumber,
           text: combinedText,
           originalText: combinedText,
+          runs: normalizedRuns,
           blockIndex: first.blockIndex,
           blockIndices: currentGroup.map((r) => r.blockIndex),
           opIndex: first.blockIndex,
@@ -344,6 +368,22 @@ export class PdfContentExtractor {
         const origMaxY = Math.max(...currentParagraph.map((l) => (l.origY ?? l.y) + (l.origHeight ?? l.height)))
 
         const combinedText = currentParagraph.map((l) => l.text).join('\n')
+        const mergedRuns: TextRun[] = []
+        currentParagraph.forEach((l, idx) => {
+          if (idx > 0) {
+            mergedRuns.push({ text: '\n', bold: false, italic: false })
+          }
+          if (l.runs && l.runs.length > 0) {
+            mergedRuns.push(...l.runs)
+          } else {
+            mergedRuns.push({
+              text: l.text,
+              bold: l.fontWeight === 700,
+              italic: l.fontStyle === 'italic',
+              underline: l.underline,
+            })
+          }
+        })
         const allBlockIndices = currentParagraph.flatMap((l) => l.blockIndices || [l.blockIndex ?? 0])
 
         const deltaYpt =
@@ -356,6 +396,7 @@ export class PdfContentExtractor {
           pageNumber,
           text: combinedText,
           originalText: combinedText,
+          runs: normalizeRuns(mergedRuns),
           blockIndex: first.blockIndex,
           blockIndices: allBlockIndices,
           opIndex: first.opIndex,

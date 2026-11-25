@@ -36,6 +36,14 @@ export interface PageThumbnail {
   isDeleted?: boolean
 }
 
+export interface TextRun {
+  text: string
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  color?: string
+}
+
 export interface AnnotationItem {
   id: string
   type: 'highlight' | 'text' | 'comment' | 'shape' | 'signature' | 'image' | 'redact'
@@ -49,8 +57,12 @@ export interface AnnotationItem {
   opacity?: number
   strokeWidth?: number
   text?: string
+  runs?: TextRun[]
   fontSize?: number
   fontFamily?: string
+  fontWeight?: string | number
+  fontStyle?: string
+  underline?: boolean
   shapeType?: 'rect' | 'circle' | 'line' | 'arrow'
   dataUrl?: string
   author?: string
@@ -64,6 +76,7 @@ export interface PdfTextElement {
   pageNumber: number
   text: string
   originalText: string
+  runs?: TextRun[]
   x: number // percentage 0-100
   y: number // percentage 0-100
   width: number // percentage
@@ -80,6 +93,7 @@ export interface PdfTextElement {
   fontFamily: string
   fontWeight?: string | number
   fontStyle?: string
+  underline?: boolean
   color: string
   backgroundColor?: string
   alignment?: 'left' | 'center' | 'right'

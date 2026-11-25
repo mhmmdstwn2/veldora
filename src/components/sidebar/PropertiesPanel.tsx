@@ -18,11 +18,13 @@ import {
   Upload,
   Bold,
   Italic,
+  Underline,
   MessageSquare,
   CheckCircle2,
 } from 'lucide-react'
 import { usePdfStore } from '@/stores/usePdfStore'
 import { PdfTextElement, PdfImageElement, AnnotationItem } from '@/types'
+import { applyRunStyleToAll, getEffectiveRuns } from '@/core/pdf/rich-text'
 import { calculateFittedDimensions } from '@/utils/image-utils'
 
 export const PropertiesPanel: React.FC = () => {
@@ -239,64 +241,151 @@ export const PropertiesPanel: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Font Style Toggles (Bold, Italic) */}
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const currentBold =
-                          (textObj as any).fontWeight === 700 ||
-                          textObj.fontFamily?.includes('Bold')
-                        const newBold = !currentBold
-                        const currentFamily = textObj.fontFamily || 'Helvetica'
-                        let newFamily = currentFamily
-                        if (newBold && !newFamily.includes('Bold')) {
-                          newFamily = `${newFamily}-Bold`
-                        } else if (!newBold && newFamily.includes('-Bold')) {
-                          newFamily = newFamily.replace('-Bold', '')
-                        }
-                        if (isOrig) {
-                          updateOriginalText(textObj.id, {
-                            fontFamily: newFamily,
-                            fontWeight: newBold ? 700 : 400,
-                          })
-                        } else {
-                          updateAnnotation(textObj.id, { fontFamily: newFamily })
-                        }
-                      }}
-                      className={`flex-1 py-1.5 px-3 rounded-lg border font-bold flex items-center justify-center gap-1.5 text-xs transition-colors ${(textObj as any).fontWeight === 700 ||
-                          textObj.fontFamily?.includes('Bold')
-                          ? 'bg-brand-violet border-brand-violet text-white'
-                          : 'bg-[#181b26] border-[#272b3c] text-slate-400 hover:text-white'
-                        }`}
-                    >
-                      <Bold className="w-3.5 h-3.5" />
-                      Bold
-                    </button>
+                  {/* Font Style Toggles (Bold, Italic, Underline) */}
+                  <div className="flex items-center gap-1.5" data-rich-format-control="true">
+                    {(() => {
+                      const runs = getEffectiveRuns(textObj)
+                      const isInlineActive = () =>
+                        Boolean(document.querySelector('[contenteditable="true"][role="textbox"]'))
+                      const allBold =
+                        runs.length > 0
+                          ? runs.every((r) => r.bold)
+                          : (textObj as any).fontWeight === 700 ||
+                            textObj.fontFamily?.includes('Bold')
+                      const allItalic =
+                        runs.length > 0
+                          ? runs.every((r) => r.italic)
+                          : (textObj as any).fontStyle === 'italic' ||
+                            textObj.fontFamily?.includes('Italic')
+                      const allUnderline =
+                        runs.length > 0
+                          ? runs.every((r) => r.underline)
+                          : Boolean((textObj as any).underline)
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const currentItalic =
-                          (textObj as any).fontStyle === 'italic' ||
-                          textObj.fontFamily?.includes('Italic') ||
-                          textObj.fontFamily?.includes('Oblique')
-                        const newItalic = !currentItalic
-                        if (isOrig) {
-                          updateOriginalText(textObj.id, {
-                            fontStyle: newItalic ? 'italic' : 'normal',
-                          })
-                        }
-                      }}
-                      className={`flex-1 py-1.5 px-3 rounded-lg border italic flex items-center justify-center gap-1.5 text-xs transition-colors ${(textObj as any).fontStyle === 'italic' ||
-                          textObj.fontFamily?.includes('Italic')
-                          ? 'bg-brand-violet border-brand-violet text-white'
-                          : 'bg-[#181b26] border-[#272b3c] text-slate-400 hover:text-white'
-                        }`}
-                    >
-                      <Italic className="w-3.5 h-3.5" />
-                      Italic
-                    </button>
+                      return (
+                        <>
+                          <button
+                            type="button"
+                            data-rich-format-control="true"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              if (isInlineActive()) {
+                                window.dispatchEvent(
+                                  new CustomEvent('veldora:format-inline', {
+                                    detail: { command: 'bold' },
+                                  })
+                                )
+                                return
+                              }
+                              const newBold = !allBold
+                              const nextRuns = applyRunStyleToAll(runs, { bold: newBold })
+                              const currentFamily = textObj.fontFamily || 'Helvetica'
+                              let newFamily = currentFamily
+                              if (newBold && !newFamily.includes('Bold')) {
+                                newFamily = `${newFamily}-Bold`
+                              } else if (!newBold && newFamily.includes('-Bold')) {
+                                newFamily = newFamily.replace('-Bold', '')
+                              }
+                              if (isOrig) {
+                                updateOriginalText(textObj.id, {
+                                  runs: nextRuns,
+                                  fontFamily: newFamily,
+                                  fontWeight: newBold ? 700 : 400,
+                                })
+                              } else {
+                                updateAnnotation(textObj.id, {
+                                  runs: nextRuns,
+                                  fontFamily: newFamily,
+                                  fontWeight: newBold ? 700 : 400,
+                                })
+                              }
+                            }}
+                            title="Bold (Ctrl+B)"
+                            className={`flex-1 py-1.5 px-2 rounded-lg border font-bold flex items-center justify-center gap-1 text-xs transition-colors ${allBold
+                              ? 'bg-brand-violet border-brand-violet text-white'
+                              : 'bg-[#181b26] border-[#272b3c] text-slate-400 hover:text-white'
+                              }`}
+                          >
+                            <Bold className="w-3.5 h-3.5" />
+                            B
+                          </button>
+
+                          <button
+                            type="button"
+                            data-rich-format-control="true"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              if (isInlineActive()) {
+                                window.dispatchEvent(
+                                  new CustomEvent('veldora:format-inline', {
+                                    detail: { command: 'italic' },
+                                  })
+                                )
+                                return
+                              }
+                              const newItalic = !allItalic
+                              const nextRuns = applyRunStyleToAll(runs, { italic: newItalic })
+                              if (isOrig) {
+                                updateOriginalText(textObj.id, {
+                                  runs: nextRuns,
+                                  fontStyle: newItalic ? 'italic' : 'normal',
+                                })
+                              } else {
+                                updateAnnotation(textObj.id, {
+                                  runs: nextRuns,
+                                  fontStyle: newItalic ? 'italic' : 'normal',
+                                })
+                              }
+                            }}
+                            title="Italic (Ctrl+I)"
+                            className={`flex-1 py-1.5 px-2 rounded-lg border italic flex items-center justify-center gap-1 text-xs transition-colors ${allItalic
+                              ? 'bg-brand-violet border-brand-violet text-white'
+                              : 'bg-[#181b26] border-[#272b3c] text-slate-400 hover:text-white'
+                              }`}
+                          >
+                            <Italic className="w-3.5 h-3.5" />
+                            I
+                          </button>
+
+                          <button
+                            type="button"
+                            data-rich-format-control="true"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              if (isInlineActive()) {
+                                window.dispatchEvent(
+                                  new CustomEvent('veldora:format-inline', {
+                                    detail: { command: 'underline' },
+                                  })
+                                )
+                                return
+                              }
+                              const newUnderline = !allUnderline
+                              const nextRuns = applyRunStyleToAll(runs, { underline: newUnderline })
+                              if (isOrig) {
+                                updateOriginalText(textObj.id, {
+                                  runs: nextRuns,
+                                  underline: newUnderline,
+                                })
+                              } else {
+                                updateAnnotation(textObj.id, {
+                                  runs: nextRuns,
+                                  underline: newUnderline,
+                                })
+                              }
+                            }}
+                            title="Underline (Ctrl+U)"
+                            className={`flex-1 py-1.5 px-2 rounded-lg border underline flex items-center justify-center gap-1 text-xs transition-colors ${allUnderline
+                              ? 'bg-brand-violet border-brand-violet text-white'
+                              : 'bg-[#181b26] border-[#272b3c] text-slate-400 hover:text-white'
+                              }`}
+                          >
+                            <Underline className="w-3.5 h-3.5" />
+                            U
+                          </button>
+                        </>
+                      )
+                    })()}
                   </div>
 
                   {/* Font Color with Native Color Picker & Hex Input */}

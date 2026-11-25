@@ -1,6 +1,6 @@
 {
   "name": "veldora",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "VELDORA - Professional Local-first PDF Editor",
   "main": "dist-electron/main.cjs",
   "type": "module",

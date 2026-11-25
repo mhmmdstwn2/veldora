@@ -17,11 +17,21 @@ import {
   MessageSquare,
   CheckCircle2,
   Type as TypeIcon,
+  Bold,
+  Italic,
+  Underline,
 } from 'lucide-react'
 import { usePdfStore } from '@/stores/usePdfStore'
 import { PdfLoader } from '@/core/pdf/pdf-loader'
 import { FloatingPageTools } from '@/components/toolbar/FloatingPageTools'
-import { AnnotationItem, DetectedSignatureSpot, PdfTextElement } from '@/types'
+import { AnnotationItem, DetectedSignatureSpot, PdfTextElement, TextRun } from '@/types'
+import {
+  applyRunStyleToAll,
+  getEffectiveRuns,
+  htmlToRuns,
+  runsToHtml,
+  runsToPlainText,
+} from '@/core/pdf/rich-text'
 import { calculateFittedDimensions, getCssFontFamily } from '@/utils/image-utils'
 
 const CANVAS_SCALE = 1.5
@@ -65,7 +75,7 @@ export const PdfCanvasViewer: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const richEditorRef = useRef<HTMLDivElement | null>(null)
   const commentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [replacingImageId, setReplacingImageId] = useState<string | null>(null)
 
@@ -105,7 +115,7 @@ export const PdfCanvasViewer: React.FC = () => {
   const [startPos, setStartPos] = useState<{ x: number; y: number } | null>(null)
   const [currentBox, setCurrentBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
 
-  // Inline text editing state (Canva style)
+  // Inline text editing state (Canva style with per-selection rich text runs)
   const [inlineEditor, setInlineEditor] = useState<{
     visible: boolean
     id?: string
@@ -115,6 +125,7 @@ export const PdfCanvasViewer: React.FC = () => {
     width?: number
     height?: number
     text: string
+    runs?: TextRun[]
     isWhiteout: boolean
     fontSize: number
     lineHeight?: number
@@ -122,30 +133,109 @@ export const PdfCanvasViewer: React.FC = () => {
     fontFamily?: string
     fontWeight?: string | number
     fontStyle?: string
+    underline?: boolean
   }>({
     visible: false,
     x: 0,
     y: 0,
     text: '',
+    runs: [],
     isWhiteout: false,
     fontSize: 14,
     color: '#000000',
     fontFamily: 'Helvetica',
   })
 
+  const [inlineFormatState, setInlineFormatState] = useState<{
+    bold: boolean
+    italic: boolean
+    underline: boolean
+  }>({ bold: false, italic: false, underline: false })
+
+  const refreshInlineFormatState = () => {
+    try {
+      setInlineFormatState({
+        bold: document.queryCommandState('bold'),
+        italic: document.queryCommandState('italic'),
+        underline: document.queryCommandState('underline'),
+      })
+    } catch {
+      // ignore
+    }
+  }
+
+  const syncInlineEditorFromDom = () => {
+    const el = richEditorRef.current
+    if (!el) return
+    const nextRuns = htmlToRuns(el)
+    const nextText = runsToPlainText(nextRuns)
+    setInlineEditor((prev) => ({
+      ...prev,
+      text: nextText,
+      runs: nextRuns,
+    }))
+    refreshInlineFormatState()
+  }
+
+  const applyInlineFormat = (cmd: 'bold' | 'italic' | 'underline') => {
+    const el = richEditorRef.current
+    if (!el) return
+    if (document.activeElement !== el) {
+      el.focus()
+    }
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0) {
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      sel?.removeAllRanges()
+      sel?.addRange(range)
+    }
+    document.execCommand(cmd, false)
+    syncInlineEditorFromDom()
+  }
+
   // Render PDF page to canvas
   const currentPageInfo = pages.find((p) => p.pageNumber === currentPage)
   const pageRotation = (currentPageInfo?.rotation || 0) + rotation
 
-  // Ensure inline text & comment draft textareas reliably acquire focus when opened
+  // Populate contentEditable once when inlineEditor opens & select all text
   useEffect(() => {
     if (inlineEditor.visible) {
       const timer = setTimeout(() => {
-        textareaRef.current?.focus()
+        const el = richEditorRef.current
+        if (!el) return
+        const initialRuns =
+          inlineEditor.runs && inlineEditor.runs.length > 0
+            ? inlineEditor.runs
+            : getEffectiveRuns(inlineEditor)
+        el.innerHTML = runsToHtml(initialRuns)
+        el.focus()
+        try {
+          const range = document.createRange()
+          range.selectNodeContents(el)
+          const sel = window.getSelection()
+          sel?.removeAllRanges()
+          sel?.addRange(range)
+        } catch {
+          // ignore
+        }
+        refreshInlineFormatState()
       }, 0)
       return () => clearTimeout(timer)
     }
   }, [inlineEditor.visible, inlineEditor.x, inlineEditor.y, inlineEditor.id])
+
+  // Allow PropertiesPanel B/I/U buttons to format active selection inside inlineEditor
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ command: 'bold' | 'italic' | 'underline' }>).detail
+      if (inlineEditor.visible && detail?.command) {
+        applyInlineFormat(detail.command)
+      }
+    }
+    window.addEventListener('veldora:format-inline', handler)
+    return () => window.removeEventListener('veldora:format-inline', handler)
+  }, [inlineEditor.visible])
 
   useEffect(() => {
     if (commentDraft.visible) {
@@ -497,12 +587,19 @@ export const PdfCanvasViewer: React.FC = () => {
       e.stopPropagation()
       e.preventDefault()
     }
-    if (inlineEditor.text.trim()) {
+    const finalRuns = richEditorRef.current
+      ? htmlToRuns(richEditorRef.current)
+      : inlineEditor.runs || []
+    const finalText = richEditorRef.current
+      ? runsToPlainText(finalRuns)
+      : inlineEditor.text
+
+    if (finalText.trim()) {
       if (inlineEditor.isOriginalText && inlineEditor.id) {
         // True PDF modification: updates content stream and re-renders canvas natively
         const targetTxt = pageOriginalTexts.find((t) => t.id === inlineEditor.id)
         const oldLen = Math.max(1, (targetTxt?.originalText || '').length)
-        const newLen = inlineEditor.text.length
+        const newLen = finalText.length
         let autoWidth = targetTxt?.width || inlineEditor.width
         if (newLen > oldLen && autoWidth) {
           const ratio = newLen / oldLen
@@ -510,18 +607,21 @@ export const PdfCanvasViewer: React.FC = () => {
         }
 
         commitTextEdit(inlineEditor.id, {
-          text: inlineEditor.text,
+          text: finalText,
+          runs: finalRuns,
           fontSize: inlineEditor.fontSize,
           color: inlineEditor.color,
           fontFamily: inlineEditor.fontFamily,
           fontWeight: inlineEditor.fontWeight,
           fontStyle: inlineEditor.fontStyle,
+          underline: inlineEditor.underline,
           width: autoWidth ? Math.round(autoWidth * 10) / 10 : undefined,
           isModified: true,
         })
       } else if (inlineEditor.id) {
         updateAnnotation(inlineEditor.id, {
-          text: inlineEditor.text,
+          text: finalText,
+          runs: finalRuns,
           fontSize: inlineEditor.fontSize,
           color: inlineEditor.color,
           backgroundColor: inlineEditor.isWhiteout ? '#ffffff' : undefined,
@@ -532,7 +632,8 @@ export const PdfCanvasViewer: React.FC = () => {
           pageNumber: currentPage,
           x: inlineEditor.x,
           y: inlineEditor.y,
-          text: inlineEditor.text,
+          text: finalText,
+          runs: finalRuns,
           color: inlineEditor.color,
           fontSize: inlineEditor.fontSize,
           fontFamily: inlineEditor.fontFamily,
@@ -545,6 +646,7 @@ export const PdfCanvasViewer: React.FC = () => {
       x: 0,
       y: 0,
       text: '',
+      runs: [],
       isWhiteout: false,
       fontSize: 14,
       color: '#000000',
@@ -946,10 +1048,14 @@ export const PdfCanvasViewer: React.FC = () => {
       width: ann.width,
       height: ann.height,
       text: ann.text || '',
+      runs: getEffectiveRuns(ann),
       isWhiteout: !!ann.backgroundColor,
       fontSize: ann.fontSize || 14,
       color: ann.color || '#0f172a',
       fontFamily: ann.fontFamily || 'Helvetica',
+      fontWeight: ann.fontWeight,
+      fontStyle: ann.fontStyle,
+      underline: ann.underline,
     })
   }
 
@@ -967,6 +1073,7 @@ export const PdfCanvasViewer: React.FC = () => {
       width: txt.width,
       height: txt.height,
       text: txt.text,
+      runs: getEffectiveRuns(txt),
       isWhiteout: true,
       fontSize: txt.fontSize || 12,
       lineHeight: txt.lineHeight,
@@ -974,6 +1081,7 @@ export const PdfCanvasViewer: React.FC = () => {
       fontFamily: txt.fontFamily || 'Helvetica',
       fontWeight: txt.fontWeight ?? (txt.fontFamily?.includes('Bold') ? 700 : 400),
       fontStyle: txt.fontStyle ?? (txt.fontFamily?.includes('Italic') ? 'italic' : 'normal'),
+      underline: txt.underline,
     })
   }
 
@@ -1062,6 +1170,55 @@ export const PdfCanvasViewer: React.FC = () => {
         target.isContentEditable ||
         inlineEditor.visible
       ) {
+        return
+      }
+
+      // Formatting shortcuts (Ctrl+B, Ctrl+I, Ctrl+U) when a text object is selected
+      if ((e.ctrlKey || e.metaKey) && ['b', 'i', 'u'].includes(e.key.toLowerCase())) {
+        const state = usePdfStore.getState()
+        const selObj = state.selectedObject
+        if (selObj?.type === 'text') {
+          e.preventDefault()
+          const cmd = e.key.toLowerCase()
+          const isOrig = state.originalTexts.some((t) => t.id === selObj.id)
+          const item = isOrig
+            ? state.originalTexts.find((t) => t.id === selObj.id)
+            : state.annotations.find((a) => a.id === selObj.id)
+          if (item) {
+            const runs = getEffectiveRuns(item)
+            if (cmd === 'b') {
+              const allBold = runs.length > 0 && runs.every((r) => r.bold)
+              const nextRuns = applyRunStyleToAll(runs, { bold: !allBold })
+              if (isOrig) {
+                updateOriginalText(item.id, { runs: nextRuns, fontWeight: !allBold ? 700 : 400, isModified: true })
+              } else {
+                updateAnnotation(item.id, { runs: nextRuns, fontWeight: !allBold ? 700 : 400 })
+              }
+            } else if (cmd === 'i') {
+              const allItalic = runs.length > 0 && runs.every((r) => r.italic)
+              const nextRuns = applyRunStyleToAll(runs, { italic: !allItalic })
+              if (isOrig) {
+                updateOriginalText(item.id, { runs: nextRuns, fontStyle: !allItalic ? 'italic' : 'normal', isModified: true })
+              } else {
+                updateAnnotation(item.id, { runs: nextRuns, fontStyle: !allItalic ? 'italic' : 'normal' })
+              }
+            } else if (cmd === 'u') {
+              const allUnderline = runs.length > 0 && runs.every((r) => r.underline)
+              const nextRuns = applyRunStyleToAll(runs, { underline: !allUnderline })
+              if (isOrig) {
+                updateOriginalText(item.id, { runs: nextRuns, underline: !allUnderline, isModified: true })
+              } else {
+                updateAnnotation(item.id, { runs: nextRuns, underline: !allUnderline })
+              }
+            }
+          }
+          return
+        }
+      }
+
+      if (e.key === 'Escape') {
+        setSelectedObject(null)
+        setSelectedAnnId(null)
         return
       }
 
@@ -1478,10 +1635,6 @@ export const PdfCanvasViewer: React.FC = () => {
                         display: 'block',
                         fontSize: `${txt.fontSize * effectiveScale}px`,
                         color: txt.color || '#000000',
-                        fontWeight:
-                          txt.fontWeight ?? (txt.fontFamily?.includes('Bold') ? 700 : 400),
-                        fontStyle:
-                          txt.fontStyle ?? (txt.fontFamily?.includes('Italic') ? 'italic' : 'normal'),
                         fontFamily: getCssFontFamily(txt.fontFamily),
                         lineHeight: txt.lineHeight
                           ? `${txt.lineHeight * effectiveScale}px`
@@ -1491,7 +1644,19 @@ export const PdfCanvasViewer: React.FC = () => {
                         overflowWrap: 'break-word',
                       }}
                     >
-                      {txt.text}
+                      {getEffectiveRuns(txt).map((run, idx) => (
+                        <span
+                          key={idx}
+                          style={{
+                            fontWeight: run.bold ? 700 : 400,
+                            fontStyle: run.italic ? 'italic' : 'normal',
+                            textDecoration: run.underline ? 'underline' : 'none',
+                            color: run.color || undefined,
+                          }}
+                        >
+                          {run.text}
+                        </span>
+                      ))}
                     </span>
                   )}
 
@@ -1851,18 +2016,29 @@ export const PdfCanvasViewer: React.FC = () => {
                 {/* Text / Whiteout Replace */}
                 {ann.type === 'text' && (
                   <div
-                    className={`whitespace-pre font-sans font-medium px-1 py-0.5 leading-normal rounded-none transition-colors ${ann.backgroundColor ? 'bg-white' : ''
+                    className={`whitespace-pre-wrap font-sans px-1 py-0.5 leading-normal rounded-none transition-colors ${ann.backgroundColor ? 'bg-white' : ''
                       }`}
                     style={{
                       color: ann.color || '#0f172a',
                       fontSize: `${(ann.fontSize || 14) * effectiveScale}px`,
                       fontFamily: getCssFontFamily(ann.fontFamily),
-                      fontWeight: ann.fontFamily?.includes('Bold') ? 700 : 500,
                       backgroundColor: ann.backgroundColor || undefined,
                     }}
                     title="Klik dan tahan untuk geser, double-click untuk edit teks"
                   >
-                    {ann.text}
+                    {getEffectiveRuns(ann).map((run, idx) => (
+                      <span
+                        key={idx}
+                        style={{
+                          fontWeight: run.bold ? 700 : 400,
+                          fontStyle: run.italic ? 'italic' : 'normal',
+                          textDecoration: run.underline ? 'underline' : 'none',
+                          color: run.color || undefined,
+                        }}
+                      >
+                        {run.text}
+                      </span>
+                    ))}
                   </div>
                 )}
 
@@ -2180,105 +2356,205 @@ export const PdfCanvasViewer: React.FC = () => {
                   className="rounded-xs border-2 border-brand-violet px-1 py-0.5 shadow-lg"
                   style={{ backgroundColor: editorBg }}
                 >
-                  <textarea
-                    ref={textareaRef}
-                    autoFocus
-                    rows={Math.max(1, (inlineEditor.text.match(/\n/g) || []).length + 1)}
-                    placeholder="Ketik teks di sini..."
-                    value={inlineEditor.text}
-                    onFocus={(e) => e.target.select()}
-                    onBlur={() => {
+                  <div
+                    ref={richEditorRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    role="textbox"
+                    aria-multiline="true"
+                    data-placeholder="Ketik teks di sini..."
+                    onInput={() => syncInlineEditorFromDom()}
+                    onMouseUp={() => refreshInlineFormatState()}
+                    onKeyUp={() => refreshInlineFormatState()}
+                    onPaste={(e) => {
+                      e.preventDefault()
+                      const plain = e.clipboardData.getData('text/plain')
+                      document.execCommand('insertText', false, plain)
+                      syncInlineEditorFromDom()
+                    }}
+                    onBlur={(e) => {
+                      // Don't close if focus moved inside PropertiesPanel or inline toolbar
+                      const next = e.relatedTarget as HTMLElement | null
+                      if (next && next.closest('[data-rich-format-control="true"]')) {
+                        return
+                      }
                       if (inlineEditor.isOriginalText) {
                         commitInlineText()
                       }
                     }}
-                    onChange={(e) =>
-                      setInlineEditor({ ...inlineEditor, text: e.target.value })
-                    }
                     onKeyDown={(e) => {
+                      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        applyInlineFormat('bold')
+                        return
+                      }
+                      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'i') {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        applyInlineFormat('italic')
+                        return
+                      }
+                      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        applyInlineFormat('underline')
+                        return
+                      }
                       if (
                         e.key === 'Enter' &&
+                        !e.shiftKey &&
                         (e.ctrlKey || e.metaKey || !inlineEditor.text.includes('\n'))
                       ) {
                         e.preventDefault()
                         commitInlineText()
+                        return
                       }
                       if (e.key === 'Escape') {
+                        e.preventDefault()
                         cancelInlineText()
                       }
                     }}
-                    className="bg-transparent resize-none focus:outline-none w-full block leading-normal p-0 m-0"
+                    className="bg-transparent focus:outline-none w-full block leading-normal p-0 m-0 min-h-[1.2em] cursor-text"
                     style={{
                       fontSize: `${inlineEditor.fontSize * effectiveScale}px`,
                       color: inlineEditor.color || '#000000',
-                      fontWeight:
-                        inlineEditor.fontWeight ??
-                        (inlineEditor.fontFamily?.includes('Bold') ? 700 : 400),
-                      fontStyle:
-                        inlineEditor.fontStyle ??
-                        (inlineEditor.fontFamily?.includes('Italic') ||
-                          inlineEditor.fontFamily?.includes('Oblique')
-                          ? 'italic'
-                          : 'normal'),
                       fontFamily: getCssFontFamily(inlineEditor.fontFamily),
                       lineHeight: inlineEditor.lineHeight
                         ? `${inlineEditor.lineHeight * effectiveScale}px`
                         : 1.35,
                       whiteSpace: 'pre-wrap',
+                      wordBreak: 'normal',
+                      overflowWrap: 'break-word',
                     }}
                   />
                 </div>
               )
             })()}
 
-            {!inlineEditor.isOriginalText && (
-              <div
-                className="mt-1 flex items-center gap-1.5 bg-[#12141a]/95 border border-[#2b2e3d] p-1 rounded-lg shadow-xl text-xs select-none"
-                onMouseDown={(e) => e.stopPropagation()}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => e.stopPropagation()}
+            <div
+              data-rich-format-control="true"
+              className="mt-1 flex items-center gap-1 bg-[#12141a]/95 border border-[#2b2e3d] p-1 rounded-lg shadow-xl text-xs select-none"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                data-rich-format-control="true"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  applyInlineFormat('bold')
+                }}
+                className={`p-1 rounded transition-colors ${inlineFormatState.bold
+                  ? 'bg-brand-violet text-white'
+                  : 'text-slate-300 hover:text-white hover:bg-[#202432]'
+                  }`}
+                title="Bold (Ctrl+B)"
               >
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setInlineEditor({
-                      ...inlineEditor,
-                      isWhiteout: !inlineEditor.isWhiteout,
-                    })
-                  }}
-                  className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${inlineEditor.isWhiteout
-                    ? 'bg-emerald-600 text-white'
-                    : 'text-slate-400 hover:text-white hover:bg-[#202432]'
-                    }`}
-                  title="Whiteout background to replace original text"
-                >
-                  <Eraser className="w-3 h-3" />
-                  Whiteout BG
-                </button>
-                <div className="w-px h-3 bg-slate-700" />
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={cancelInlineText}
-                  className="p-1 text-slate-400 hover:text-white hover:bg-[#202432] rounded transition-colors"
-                  title="Cancel (Esc)"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={commitInlineText}
-                  className="px-2.5 py-0.5 bg-brand-violet hover:bg-purple-600 text-white rounded text-[11px] font-medium flex items-center gap-1 shadow-sm transition-colors active:scale-95"
-                  title="Done (Enter)"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  Done
-                </button>
-              </div>
-            )}
+                <Bold className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                data-rich-format-control="true"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  applyInlineFormat('italic')
+                }}
+                className={`p-1 rounded transition-colors ${inlineFormatState.italic
+                  ? 'bg-brand-violet text-white'
+                  : 'text-slate-300 hover:text-white hover:bg-[#202432]'
+                  }`}
+                title="Italic (Ctrl+I)"
+              >
+                <Italic className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                data-rich-format-control="true"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  applyInlineFormat('underline')
+                }}
+                className={`p-1 rounded transition-colors ${inlineFormatState.underline
+                  ? 'bg-brand-violet text-white'
+                  : 'text-slate-300 hover:text-white hover:bg-[#202432]'
+                  }`}
+                title="Underline (Ctrl+U)"
+              >
+                <Underline className="w-3.5 h-3.5" />
+              </button>
+
+              {!inlineEditor.isOriginalText && (
+                <>
+                  <div className="w-px h-3 bg-slate-700 mx-0.5" />
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setInlineEditor({
+                        ...inlineEditor,
+                        isWhiteout: !inlineEditor.isWhiteout,
+                      })
+                    }}
+                    className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${inlineEditor.isWhiteout
+                      ? 'bg-emerald-600 text-white'
+                      : 'text-slate-400 hover:text-white hover:bg-[#202432]'
+                      }`}
+                    title="Whiteout background to replace original text"
+                  >
+                    <Eraser className="w-3 h-3" />
+                    Whiteout BG
+                  </button>
+                </>
+              )}
+
+              <div className="w-px h-3 bg-slate-700 mx-0.5" />
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
+                onClick={cancelInlineText}
+                className="p-1 text-slate-400 hover:text-white hover:bg-[#202432] rounded transition-colors"
+                title="Cancel (Esc)"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
+                onClick={commitInlineText}
+                className="px-2.5 py-0.5 bg-brand-violet hover:bg-purple-600 text-white rounded text-[11px] font-medium flex items-center gap-1 shadow-sm transition-colors active:scale-95"
+                title="Done (Enter)"
+              >
+                <Check className="w-3.5 h-3.5" />
+                Done
+              </button>
+            </div>
           </div>
         )}
       </div>
